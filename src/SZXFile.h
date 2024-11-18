@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace rm {
-    bool rm::decompressData(byte const* compressedData, size_t compressedSize, byte* decompressedData, size_t decompressedSize);
+    bool decompressData(byte const* compressedData, size_t compressedSize, byte* decompressedData, size_t decompressedSize);
 
     //Supports SZX 1.4 specification
     class SZXFile
@@ -183,6 +183,13 @@ namespace rm {
 
 #define UINT(b) ((uint)(b[0]) << 24 | (uint)(b[1]) << 16 | (uint)(b[2]) << 8 | (b[3]))
 
+#define UNUINT(b, v) do { \
+        (b)[0] = (v) & 255; \
+        (b)[1] = ((v) >> 8) & 255; \
+        (b)[2] = ((v) >> 16) & 255; \
+        (b)[3] = ((v) >> 24) & 255; \
+    } while (0)
+
         bool LoadSZX(std::vector<byte> const& buffer) {
             if (buffer.size() == 0)
                 return false; //something bad happened!
@@ -257,19 +264,17 @@ namespace rm {
                         //Compressed?
                         if ((tape.flags[0] & 2) != 0) {
                             embeddedTapeData.resize(UINT(tape.uncompressedSize));
-                            decompressData(buffer.data() + bufferCounter, tape.compressedSize, embeddedTapeData.data(), tape.uncompressedSize);
+                            decompressData(buffer.data() + bufferCounter, UINT(tape.compressedSize), embeddedTapeData.data(), UINT(tape.uncompressedSize));
                         }
                         else {
-                            embeddedTapeData.resize(tape.compressedSize);
-                            memcpy(embeddedTapeData.data(), buffer.data() + bufferCount, tape.compressedSize);
+                            embeddedTapeData.resize(UINT(tape.compressedSize));
+                            memcpy(embeddedTapeData.data(), buffer.data() + bufferCounter, UINT(tape.compressedSize));
                         }
                     }
                     else //external tape file
                     {
-                        int offset = bufferCounter + Marshal.SizeOf(tape);
-                        char[] file2 = new char[tape.compressedSize - 1];
-                        Array.Copy(buffer, offset, file2, 0, tape.compressedSize - 1); //leave out the \0 terminator
-                        externalTapeFile = new String(file2);
+                        int offset = bufferCounter + sizeof(tape);
+                        externalTapeFile = string((char*)buffer.data() + offset, UINT(tape.compressedSize) - 1);
                     }
                     break;
 
@@ -278,7 +283,7 @@ namespace rm {
                     ZXST_RAMPage ramPages;
                     memcpy(&ramPages, buffer.data() + bufferCounter, sizeof(ramPages));
 
-                    if (ramPages.wFlags == ZXSTRF_COMPRESSED) {
+                    if (ramPages.wFlags[0] == ZXSTRF_COMPRESSED) {
                         int offset = bufferCounter + sizeof(ramPages);
                         int compressedSize = ((int)block.Size - (sizeof(ramPages)));//  - Marshal.SizeOf(block) - 1 ));
                         std::vector<byte> pageData;
@@ -298,7 +303,7 @@ namespace rm {
                     break;
                     }
 
-                    case ID("PLTT"):
+                    case UINT("PLTT"):
                     memcpy(&palette, buffer.data() + bufferCounter, sizeof(palette));
                     paletteLoaded = true;
                     break;
@@ -309,15 +314,7 @@ namespace rm {
 
                 bufferCounter += UINT(block.Size); //Move to next block
             }
-            pinnedBuffer.Free();
             return true;
-        }
-
-        void SaveSZX(string filename) {
-            using (FileStream fs = new FileStream(filename, FileMode.Create)) {
-                byte[] szxData = GetSZXData();
-                fs.Write(szxData, 0, szxData.Length);
-            }
         }
 
         template<typename T>
@@ -334,44 +331,46 @@ namespace rm {
 
                     write(r, header);
 
-                    block.Id = UINT("CRTR");
-                    block.Size = (uint)sizeof(creator);
+                    UNUINT(block.Id, UINT("CRTR"));
+                    UNUINT(block.Size, (uint)sizeof(creator));
                     write(r, block);
                     write(r, creator);
 
-                    block.Id = UINT("Z80R");
-                    block.Size = (uint)sizeof(z80Regs);
+                    UNUINT(block.Id, UINT("Z80R"));
+                    UNUINT(block.Size, (uint)sizeof(z80Regs));
                     write(r, block);
                     write(r, z80Regs);
 
-                    block.Id = UINT("SPCR");
-                    block.Size = (uint)sizeof(specRegs);
+                    UNUINT(block.Id, UINT("SPCR"));
+                    UNUINT(block.Size, (uint)sizeof(specRegs));
                     write(r, block);
                     write(r, specRegs);
 
-                    block.Id = UINT("KEYB");
-                    block.Size = (uint)sizeof(keyboard);
+                    UNUINT(block.Id, UINT("KEYB"));
+                    UNUINT(block.Size, (uint)sizeof(keyboard));
                     write(r, block);
                     write(r, keyboard);
 
                     if (paletteLoaded) {
-                        block.Id = UINT("PLTT");
-                        block.Size = (uint)sizeof(palette);
+                        UNUINT(block.Id, UINT("PLTT"));
+                        UNUINT(block.Size, (uint)sizeof(palette));
                         write(r, block);
                         write(r, palette);
                     }
-                    if (header.MachineId > (byte)ZXTYPE.ZXSTMID_48K) {
-                        block.Id = UINT("AY\0\0");
-                        block.Size = (uint)sizeof(ayState);
+
+                    if (header.MachineId > (byte)ZXTYPE::ZXSTMID_48K) {
+                        UNUINT(block.Id, UINT("AY\0\0"));
+                        UNUINT(block.Size, (uint)sizeof(ayState));
                         write(r, block);
                         write(r, ayState);
                         byte ram[16384];
                         for (int f = 0; f < 8; f++) {
                             ZXST_RAMPage ramPage;
                             ramPage.chPageNo = (byte)f;
-                            ramPage.wFlags = 0; //not compressed
-                            block.Id = UINT("RAMP");
-                            block.Size = (uint)(sizeof(ramPage) + 16384);
+                            ramPage.wFlags[0] = 0; //not compressed
+                            ramPage.wFlags[1] = 0; //not compressed
+                            UNUINT(block.Id, UINT("RAMP"));
+                            UNUINT(block.Size, (uint)(sizeof(ramPage) + 16384));
                             write(r, block);
                             write(r, ramPage);
                             for (int g = 0; g < 8192; g++) {
@@ -386,9 +385,10 @@ namespace rm {
                         //page 0
                         ZXST_RAMPage ramPage;
                         ramPage.chPageNo = 0;
-                        ramPage.wFlags = 0; //not compressed
-                        block.Id = UINT("RAMP");
-                        block.Size = (uint)(sizeof(ramPage) + 16384);
+                        ramPage.wFlags[0] = 0; //not compressed
+                        ramPage.wFlags[1] = 0; //not compressed
+                        UNUINT(block.Id, UINT("RAMP"));
+                        UNUINT(block.Size, (uint)(sizeof(ramPage) + 16384));
                         write(r, block);
                         write(r, ramPage);
                         for (int g = 0; g < 8192; g++) {
@@ -401,12 +401,13 @@ namespace rm {
 
                         //page 2
                         ramPage.chPageNo = 2;
-                        ramPage.wFlags = 0; //not compressed
+                        ramPage.wFlags[0] = 0; //not compressed
+                        ramPage.wFlags[1] = 0; //not compressed
                         //ramPage.chData = new byte[16384];
                         // Array.Copy(RAM_BANK[2 * 2], 0, ramPage.chData, 0, 8192);
                         //Array.Copy(RAM_BANK[2 * 2 + 1], 0, ramPage.chData, 8192, 8192);
-                        block.Id = UINT("RAMP");
-                        block.Size = (uint)(sizeof(ramPage) + 16384);
+                        UNUINT(block.Id, UINT("RAMP"));
+                        UNUINT(block.Size, (uint)(sizeof(ramPage) + 16384));
                         write(r, block);
                         write(r, ramPage);
                         for (int g = 0; g < 8192; g++) {
@@ -417,9 +418,10 @@ namespace rm {
 
                         //page 5
                         ramPage.chPageNo = 5;
-                        ramPage.wFlags = 0; //not compressed
-                        block.Id = UINT("RAMP");
-                        block.Size = (uint)(sizeof(ramPage) + 16384);
+                        ramPage.wFlags[0] = 0; //not compressed
+                        ramPage.wFlags[1] = 0; //not compressed
+                        UNUINT(block.Id, UINT("RAMP"));
+                        UNUINT(block.Size, (uint)(sizeof(ramPage) + 16384));
                         write(r, block);
                         write(r, ramPage);
                         for (int g = 0; g < 8192; g++) {
@@ -428,8 +430,9 @@ namespace rm {
                         }
                         write(r, ram);
                     }
+
                     if (InsertTape) {
-                        block.Id = UINT("TAPE");
+                        UNUINT(block.Id, UINT("TAPE"));
 
                         char const* ext = strrchr(externalTapeFile.c_str(), '.');
                         if (ext == nullptr) ext = "";
@@ -438,17 +441,16 @@ namespace rm {
                         for (int f = 1; f < len; f++)
                             tape.fileExtension[f - 1] = ext[f];
 
-                        tape.flags = 0;
-                        tape.currentBlockNo = 0;
-                        tape.compressedSize = externalTapeFile.size();
-                        tape.uncompressedSize = externalTapeFile.size();
-                        block.Size = (uint)sizeof(tape) + (uint)tape.uncompressedSize;
+                        tape.flags[0] = 0;
+                        tape.flags[1] = 0;
+                        UNUINT(tape.currentBlockNo, 0);
+                        UNUINT(tape.compressedSize, externalTapeFile.size());
+                        UNUINT(tape.uncompressedSize, externalTapeFile.size());
+                        UNUINT(block.Size, (uint)sizeof(tape) + (uint)tape.uncompressedSize);
                         write(r, block);
                         write(r, tape);
                      
-                        char[] tapeName = externalTapeFile.ToCharArray();
-
-                        r.Write(tapeName);
+                        r->insert(r->end(), externalTapeFile.begin(), externalTapeFile.end());
                     }
                 //}
 
