@@ -105,5 +105,5 @@ namespace rm {
         }
 
         virtual void UnregisterDevice(zx_spectrum* speccyModel) override;
-    }
+    };
 }
